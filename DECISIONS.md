@@ -43,8 +43,8 @@ The API returns:
 - `status: "partial"`
 - `partial: true`
 - `residentIndex` listed in `missingSources`.
-- `sources.residentIndex.available: false`.
-- A failure reason in `sources.residentIndex.reason`.
+- `sourceStatus.residentIndex.available: false`.
+- A failure reason in `sourceStatus.residentIndex.reason`.
 
 ### Benefits Register unavailable
 
@@ -54,8 +54,8 @@ The API returns:
 - `status: "partial"`
 - `partial: true`
 - `benefitsRegister` listed in `missingSources`.
-- `sources.benefitsRegister.available: false`.
-- A failure reason in `sources.benefitsRegister.reason`.
+- `sourceStatus.benefitsRegister.available: false`.
+- A failure reason in `sourceStatus.benefitsRegister.reason`.
 
 ### Both sources unavailable
 
