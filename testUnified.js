@@ -3,16 +3,19 @@ const { getUnifiedData } = require("./src/services/unifiedService");
 async function test() {
   console.log("Fetching unified data...\n");
 
-  const data = await getUnifiedData();
+  const response = await getUnifiedData();
 
-  console.log("Residents:", data.residents.length);
-  console.log("Benefits:", data.benefits.length);
+  console.log("Status:", response.status);
+  console.log("Partial:", response.partial);
+
+  console.log("\nResidents:", response.data.residents.length);
+  console.log("Benefits:", response.data.benefits.length);
+
+  console.log("\nMissing sources:");
+  console.log(response.missingSources);
 
   console.log("\nSource status:");
-  console.log(data.sources);
-
-  console.log("\nErrors:");
-  console.log(data.errors);
+  console.log(response.sourceStatus);
 }
 
 test();

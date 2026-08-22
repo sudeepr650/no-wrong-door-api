@@ -10,42 +10,63 @@ async function getUnifiedData() {
   const restResult = results[0];
   const xmlResult = results[1];
 
-  const residents =
-    restResult.status === "fulfilled"
-      ? restResult.value
-      : [];
+  const residentAvailable = restResult.status === "fulfilled";
+  const benefitsAvailable = xmlResult.status === "fulfilled";
 
-  const benefits =
-    xmlResult.status === "fulfilled"
-      ? xmlResult.value
-      : [];
+  const residents = residentAvailable ? restResult.value : [];
+  const benefits = benefitsAvailable ? xmlResult.value : [];
 
-  const sources = {
-    residentIndex: restResult.status === "fulfilled",
-    benefitsRegister: xmlResult.status === "fulfilled"
+  const sourceStatus = {
+    residentIndex: {
+      available: residentAvailable,
+      reason: residentAvailable
+        ? null
+        : restResult.reason.message
+    },
+
+    benefitsRegister: {
+      available: benefitsAvailable,
+      reason: benefitsAvailable
+        ? null
+        : xmlResult.reason.message
+    }
   };
 
-  const errors = [];
+  const missingSources = [];
 
-  if (restResult.status === "rejected") {
-    errors.push({
-      source: "residentIndex",
-      message: restResult.reason.message
-    });
+  if (!residentAvailable) {
+    missingSources.push("residentIndex");
   }
 
-  if (xmlResult.status === "rejected") {
-    errors.push({
-      source: "benefitsRegister",
-      message: xmlResult.reason.message
-    });
+  if (!benefitsAvailable) {
+    missingSources.push("benefitsRegister");
   }
 
-  return {
-    residents,
-    benefits,
-    sources,
-    errors
+  const partial =
+  missingSources.length > 0 && missingSources.length < 2;
+
+const unavailable = missingSources.length === 2;
+
+const status = unavailable
+  ? "unavailable"
+  : partial
+  ? "partial"
+  : "complete";
+
+return {
+  status,
+
+  partial,
+
+  unavailable,
+    missingSources,
+
+    sourceStatus,
+
+    data: {
+      residents,
+      benefits
+    }
   };
 }
 
