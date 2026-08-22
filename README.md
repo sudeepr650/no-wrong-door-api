@@ -135,12 +135,13 @@ Invoke-RestMethod "http://localhost:3000/api/unified"
 
 The response contains:
 
-status — complete, partial, or unavailable
-residents
-benefits
-missingSources
-sourceStatus
-errors
+- `status` — `complete`, `partial`, or `unavailable`
+- `partial` — indicates whether exactly one source is unavailable
+- `unavailable` — indicates whether both sources are unavailable
+- `missingSources` — list of unavailable sources
+- `sourceStatus` — availability and failure reason for each source
+- `data.residents` — resident records returned from the REST source
+- `data.benefits` — benefit records returned from the XML source
 Response behavior
 Source availability	API status
 Both sources available	complete
