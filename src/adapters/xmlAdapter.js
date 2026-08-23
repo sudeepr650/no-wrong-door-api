@@ -5,11 +5,34 @@ const config = require("../config/config");
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
 
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+let benefitsCache = null;
+let benefitsCacheTime = 0;
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getCachedBenefits() {
+  if (
+    benefitsCache !== null &&
+    Date.now() - benefitsCacheTime < CACHE_TTL_MS
+  ) {
+    console.log("Benefits cache hit");
+    return benefitsCache;
+  }
+
+  return null;
+}
+
 async function fetchBenefitsRecords() {
+  const cachedBenefits = getCachedBenefits();
+
+  if (cachedBenefits !== null) {
+    return cachedBenefits;
+  }
+
   let lastError;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -31,6 +54,11 @@ async function fetchBenefitsRecords() {
       if (!Array.isArray(records)) {
         records = [records];
       }
+
+      benefitsCache = records;
+      benefitsCacheTime = Date.now();
+
+      console.log("Benefits cache updated");
 
       return records;
 

@@ -77,10 +77,13 @@ This ensures that missing data is never silently represented as an empty result.
 
 The API performs read-only operations and does not modify either source.
 
-Repeated requests fetch and process source data without storing or appending results between requests.
+Repeated requests do not append or accumulate records in the unified result.
+Resident deduplication is applied consistently on every request, ensuring
+that repeated requests do not produce duplicate residents.
 
-Duplicate removal is applied consistently on every request, ensuring repeated requests do not accumulate duplicate records.
-
+The Benefits Register cache stores a bounded copy of the latest successful
+response for up to 5 minutes, but cached data does not accumulate across
+requests and does not change the source data.
 ---
 
 ## 6. Identity Matching
@@ -93,39 +96,93 @@ The application therefore preserves each source's records independently.
 
 ---
 
-## 7. Caching and Circuit Breaking
+## 7. Benefits Register Caching
 
-Caching and circuit breaking were not implemented because the mandatory floor requirements were prioritised first.
+The Benefits Register can be slow and intermittently unavailable.
+To avoid repeatedly calling the source for every unified request, successful
+Benefits Register responses are cached in memory for 5 minutes.
 
-The adapter-based architecture allows these features to be added later without significantly changing the unified service or API routes.
+### Cache policy
+
+- Only successful Benefits Register responses are cached.
+- A valid cache entry is used for requests received within 5 minutes.
+- The maximum accepted staleness is therefore 5 minutes.
+- A cache hit avoids another call to the Benefits Register.
+- When the cache expires, the adapter requests fresh data.
+- A successful refresh replaces the cached data and resets the TTL.
+- Failed refresh attempts are not cached.
+- If the cache has expired and all XML retries fail, the existing graceful
+  degradation policy applies.
+
+### Why 5 minutes
+
+A 5-minute TTL provides a practical balance between reducing repeated calls
+to a slow/unreliable source and limiting the age of cached Benefits data.
+The application explicitly accepts that cached Benefits data may be up to
+5 minutes old.
+
+### Failure visibility
+
+The cache does not hide a source failure indefinitely. A valid cache can
+temporarily allow the API to continue serving the last successful data.
+Once the cache expires, the source must be contacted again. If that refresh
+fails after the existing retry policy, the caller receives the normal
+`partial` response with `benefitsRegister` in `missingSources` and the
+failure reason in `sourceStatus.benefitsRegister.reason`.
 
 ---
 
 ## 8. Day 2 — Benefits Register Failure Rate
 
-On Day 2, the Benefits Register was changed to fail on approximately 40% of calls.
+On Day 2, the Benefits Register was changed to fail on approximately 40% of
+calls. The existing adapter-based architecture continued to isolate the
+Benefits Register from the Resident Index.
 
-The existing architecture was kept unchanged because the XML adapter already isolates the Benefits Register from the rest of the application. The adapter retries failed read requests up to 3 times, while the unified service uses `Promise.allSettled()` so that a failure in the XML source does not prevent available Resident Index data from being returned.
+The XML adapter retries failed requests up to 3 times. The unified service
+uses `Promise.allSettled()` so that a failure in the Benefits Register does
+not prevent available Resident Index data from being returned.
+
+The caching policy was also validated against this failure scenario. A
+successful Benefits Register response can be served from the 5-minute cache,
+reducing repeated calls to the unreliable source. Once the cache expires,
+the adapter attempts to refresh the data using the normal retry policy.
 
 ### What we changed
 
-No application code changes were required for the Day 2 failure-rate change.
+No special Day 2 failure-handling code was required because the existing
+retry and graceful-degradation design already isolates the two sources.
 
-We tested the existing solution against the Benefits Register running with a 40% failure rate.
+Caching was added as a reliability improvement for the slow and unreliable
+Benefits Register.
 
-Two important cases were verified:
+### What we verified
 
-- When an XML request failed and a retry succeeded, the API returned `status: "complete"` with both resident and benefit data.
-- When all three XML attempts failed, the API returned `status: "partial"` while still returning the available Resident Index data and reporting `benefitsRegister` in `missingSources`.
+- When an XML request failed and a retry succeeded, the API returned
+  `status: "complete"` with both resident and benefit data.
+- When the Benefits Register was temporarily unavailable while valid cached
+  data existed, the API continued returning the cached Benefits Register
+  data.
+- When the cache expired, the adapter contacted the Benefits Register again.
+- If a refresh request failed, the existing retry policy was still applied.
+- Repeated unified requests continued to return 620 residents and 540
+  benefits without duplicate residents.
 
 ### What we chose not to change
 
 We did not increase the retry count or add unnecessary retry logic.
 
-We also did not make the Resident Index dependent on the Benefits Register. The two sources remain independently handled so that failure of one source does not unnecessarily make the entire API unavailable.
+We also did not make the Resident Index dependent on the Benefits Register.
+The two sources remain independently handled so that failure of one source
+does not unnecessarily make the entire API unavailable.
 
-### What we would have done differently
+The cache is intentionally limited to a 5-minute TTL so that it does not
+hide a permanently unavailable Benefits Register.
 
-If the 40% permanent failure rate had been known from the beginning, we would have considered adding caching for the Benefits Register earlier to reduce repeated calls to an unreliable source.
+### Trade-off
 
-However, the existing retry and graceful-degradation design was sufficient to handle the Day 2 change without rewriting the application.
+Caching improves availability and reduces repeated calls to a slow source,
+but it introduces the possibility of serving slightly stale Benefits data.
+
+We accept a maximum staleness of 5 minutes because this provides a practical
+balance between source reliability and data freshness. Once the TTL expires,
+fresh data must be obtained from the Benefits Register.
