@@ -203,7 +203,7 @@ Start the XML service with:
 
 python xml_service.py --port 8082 --failure-rate 0.40
 
-The application should continue to use the existing retry and graceful-degradation behaviour.
+The application should continue to retry failed XML requests up to 3 times. If the Benefits Register remains unavailable after the retries and no valid cached response is available, the API returns the available Resident Index data with `status: "partial"` and identifies `benefitsRegister` in `missingSources`.
 
 Because the failure is intentionally intermittent, individual requests may succeed or fail. The important behaviour is that a Benefits Register failure does not unnecessarily prevent available Resident Index data from being returned.
 
