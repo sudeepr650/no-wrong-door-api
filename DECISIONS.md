@@ -9,7 +9,9 @@ The application is divided into independent layers:
 - **Unified Service** combines the results from both sources.
 - **Routes** expose the unified data through a single API.
 
-This separation allows one source to change or fail without directly affecting the implementation of the other source.
+The source systems are intentionally kept independent. The unified service does not depend on either adapter succeeding before processing the other result.
+
+This separation was chosen because the problem explicitly expects source behaviour to be changeable without requiring the rest of the application to be rewritten.
 
 ---
 
@@ -17,7 +19,11 @@ This separation allows one source to change or fail without directly affecting t
 
 The Resident Index service is paginated and may return the same resident on more than one page.
 
-Duplicate residents are removed using the resident `id` as the unique identifier. This ensures that the unified result contains each resident only once.
+Duplicate residents are removed using the resident `id` as the unique identifier.
+
+Deduplication is performed while combining the paginated Resident Index results, ensuring that the unified result contains each Resident Index record only once.
+
+This is required because accepting every page result without deduplication would produce duplicate residents in the unified response.
 
 ---
 
@@ -25,37 +31,59 @@ Duplicate residents are removed using the resident `id` as the unique identifier
 
 The Benefits Register XML service can be slow and intermittently return HTTP 500 errors.
 
-The XML adapter retries failed requests up to **3 times**.
+The XML adapter retries a failed request up to **3 attempts**.
 
-A delay is applied between retry attempts. If all attempts fail, the source is marked as unavailable and the API continues with any data available from the other source.
+A delay is applied between retry attempts.
+
+If an attempt succeeds, the successful response is parsed and returned.
+
+If all 3 attempts fail, the XML adapter throws the final error to the unified service. The unified service handles that failure independently from the Resident Index result.
+
+The retry policy is intentionally limited to 3 attempts rather than retrying indefinitely. This prevents an unreliable source from blocking the overall API indefinitely.
 
 ---
 
 ## 4. Graceful Degradation Policy
 
-The API does not fail completely when one source is unavailable.
+The main reliability decision is that a failure of one source must not unnecessarily make the entire unified API fail.
+
+The caller-visible policy is:
+
+1. Return all data successfully obtained from available sources.
+2. If exactly one source is unavailable, return `status: "partial"` and `partial: true`.
+3. If both sources are unavailable, return `status: "unavailable"`.
+4. List unavailable sources in `missingSources`.
+5. Set the affected source's `sourceStatus.<source>.available` to `false`.
+6. Provide the failure reason in `sourceStatus.<source>.reason`.
+7. Never silently represent a failed source as an empty successful result.
 
 ### Resident Index unavailable
 
 The API returns:
 
 - Available Benefits Register data.
-- `status: "partial"`
-- `partial: true`
-- `residentIndex` listed in `missingSources`.
+- `status: "partial"`.
+- `partial: true`.
+- `residentIndex` in `missingSources`.
 - `sourceStatus.residentIndex.available: false`.
-- A failure reason in `sourceStatus.residentIndex.reason`.
+- The failure reason in `sourceStatus.residentIndex.reason`.
+- An empty `data.residents` list because no Resident Index data was successfully obtained.
+
+The caller therefore knows that the resident data is missing rather than assuming that there are simply no residents.
 
 ### Benefits Register unavailable
 
 The API returns:
 
 - Available Resident Index data.
-- `status: "partial"`
-- `partial: true`
-- `benefitsRegister` listed in `missingSources`.
+- `status: "partial"`.
+- `partial: true`.
+- `benefitsRegister` in `missingSources`.
 - `sourceStatus.benefitsRegister.available: false`.
-- A failure reason in `sourceStatus.benefitsRegister.reason`.
+- The failure reason in `sourceStatus.benefitsRegister.reason`.
+- An empty `data.benefits` list because no Benefits Register data was successfully obtained.
+
+The caller therefore knows that the benefits data is missing rather than assuming that there are simply no benefits records.
 
 ### Both sources unavailable
 
@@ -63,13 +91,15 @@ The API returns a valid response instead of a bare server error.
 
 The response contains:
 
-- `status: "unavailable"`
+- `status: "unavailable"`.
+- `partial: false`.
+- `unavailable: true`.
 - Empty resident and benefit lists.
-- Both sources listed in `missingSources`.
-- `sourceStatus.residentIndex.available: false` and the failure reason in `sourceStatus.residentIndex.reason`.
-- `sourceStatus.benefitsRegister.available: false` and the failure reason in `sourceStatus.benefitsRegister.reason`.
+- Both sources in `missingSources`.
+- `sourceStatus.residentIndex.available: false` and its failure reason.
+- `sourceStatus.benefitsRegister.available: false` and its failure reason.
 
-This ensures that missing data is never silently represented as an empty result.
+This makes the complete source failure visible to the caller.
 
 ---
 
@@ -78,111 +108,227 @@ This ensures that missing data is never silently represented as an empty result.
 The API performs read-only operations and does not modify either source.
 
 Repeated requests do not append or accumulate records in the unified result.
-Resident deduplication is applied consistently on every request, ensuring
-that repeated requests do not produce duplicate residents.
 
-The Benefits Register cache stores a bounded copy of the latest successful
-response for up to 5 minutes, but cached data does not accumulate across
-requests and does not change the source data.
+Resident deduplication is applied consistently to the Resident Index data on every request.
+
+The Benefits Register cache stores only a bounded copy of the latest successful response and does not accumulate records across requests.
+
+Therefore, repeated requests do not create additional records or change the source data.
+
+The repository test `testIdempotency.js` verifies that repeated unified requests return consistent counts and no duplicate residents.
+
 ---
 
 ## 6. Identity Matching
 
 The two source systems do not provide a shared identifier.
 
-Identity matching is intentionally not implemented because it is a stretch goal. Incorrectly merging two different residents would be worse than returning the records separately.
+Identity matching across the Resident Index and Benefits Register is intentionally **not implemented**.
 
-The application therefore preserves each source's records independently.
+This is a stretch goal rather than a floor requirement.
+
+Attempting to infer that two records belong to the same resident without a reliable shared key could incorrectly merge two different people. Incorrectly merging residents would be worse than returning the source records separately.
+
+The application therefore preserves Resident Index and Benefits Register records independently.
+
+If identity matching were added later, it would require a stated confidence threshold and a policy for uncertain matches.
 
 ---
 
 ## 7. Benefits Register Caching
 
-The Benefits Register can be slow and intermittently unavailable.
-To avoid repeatedly calling the source for every unified request, successful
-Benefits Register responses are cached in memory for 5 minutes.
+Caching was added as an optional reliability improvement after the mandatory floor requirements were implemented.
+
+The Benefits Register can be slow and intermittently unavailable. Successful Benefits Register responses are therefore cached in memory for **5 minutes**.
 
 ### Cache policy
 
 - Only successful Benefits Register responses are cached.
 - A valid cache entry is used for requests received within 5 minutes.
-- The maximum accepted staleness is therefore 5 minutes.
-- A cache hit avoids another call to the Benefits Register.
+- The maximum accepted cache staleness is therefore 5 minutes.
+- A cache hit avoids another request to the Benefits Register.
 - When the cache expires, the adapter requests fresh data.
-- A successful refresh replaces the cached data and resets the TTL.
+- A successful refresh replaces the previous cached data and resets the TTL.
 - Failed refresh attempts are not cached.
-- If the cache has expired and all XML retries fail, the existing graceful
-  degradation policy applies.
+
+### Cache and source failure behaviour
+
+When a valid cache exists, the API can continue serving the last successful Benefits Register response without repeatedly calling the unreliable source.
+
+This improves availability but means the Benefits data may be slightly stale.
+
+When the cache expires, the Benefits Register must be contacted again.
+
+If the refresh succeeds, the new response replaces the cached data.
+
+If the refresh fails after the normal retry policy, the existing graceful degradation policy applies and the caller receives a `partial` response with:
+
+- `benefitsRegister` in `missingSources`.
+- `sourceStatus.benefitsRegister.available: false`.
+- The failure reason in `sourceStatus.benefitsRegister.reason`.
+
+The cache therefore does not hide a source failure indefinitely.
 
 ### Why 5 minutes
 
-A 5-minute TTL provides a practical balance between reducing repeated calls
-to a slow/unreliable source and limiting the age of cached Benefits data.
-The application explicitly accepts that cached Benefits data may be up to
-5 minutes old.
+A 5-minute TTL provides a practical balance between reducing repeated calls to a slow or unreliable source and limiting data staleness.
 
-### Failure visibility
-
-The cache does not hide a source failure indefinitely. A valid cache can
-temporarily allow the API to continue serving the last successful data.
-Once the cache expires, the source must be contacted again. If that refresh
-fails after the existing retry policy, the caller receives the normal
-`partial` response with `benefitsRegister` in `missingSources` and the
-failure reason in `sourceStatus.benefitsRegister.reason`.
+The application explicitly accepts that cached Benefits Register data may be up to 5 minutes old.
 
 ---
 
 ## 8. Day 2 — Benefits Register Failure Rate
 
-On Day 2, the Benefits Register was changed to fail on approximately 40% of
-calls. The existing adapter-based architecture continued to isolate the
-Benefits Register from the Resident Index.
+On Day 2, the Benefits Register was changed to fail on approximately 40% of calls.
 
-The XML adapter retries failed requests up to 3 times. The unified service
-uses `Promise.allSettled()` so that a failure in the Benefits Register does
-not prevent available Resident Index data from being returned.
+The existing adapter-based architecture was deliberately kept unchanged because the XML adapter already isolates the Benefits Register from the Resident Index.
 
-The caching policy was also validated against this failure scenario. A
-successful Benefits Register response can be served from the 5-minute cache,
-reducing repeated calls to the unreliable source. Once the cache expires,
-the adapter attempts to refresh the data using the normal retry policy.
+The XML adapter continues to retry failed requests up to 3 times.
 
-### What we changed
+The unified service uses `Promise.allSettled()` so that a failure in the Benefits Register does not prevent available Resident Index data from being returned.
 
-No special Day 2 failure-handling code was required because the existing
-retry and graceful-degradation design already isolates the two sources.
+The caching policy also reduces repeated calls to the unreliable Benefits Register while a valid cache entry exists.
 
-Caching was added as a reliability improvement for the slow and unreliable
-Benefits Register.
+### What changed
 
-### What we verified
+No special Day-2 failure-handling path was required.
 
-- When an XML request failed and a retry succeeded, the API returned
-  `status: "complete"` with both resident and benefit data.
-- When the Benefits Register was temporarily unavailable while valid cached
-  data existed, the API continued returning the cached Benefits Register
-  data.
-- When the cache expired, the adapter contacted the Benefits Register again.
-- If a refresh request failed, the existing retry policy was still applied.
-- Repeated unified requests continued to return 620 residents and 540
-  benefits without duplicate residents.
+The existing architecture was able to accommodate the changed failure behaviour because:
+
+- Source communication is isolated in adapters.
+- The XML adapter owns retry behaviour.
+- The unified service handles source results independently.
+- Graceful degradation is already part of the unified response contract.
+- Successful Benefits Register responses can be served from the 5-minute cache.
+
+This avoided rewriting the application when the source failure rate changed.
+
+### What was verified during development
+
+The implementation was tested against the provided services during development.
+
+Verified behaviour includes:
+
+- A successful XML retry returns the Benefits Register data normally.
+- The unified service returns `status: "complete"` when both source operations succeed.
+- Repeated unified requests return 620 residents and 540 benefits without accumulating duplicate residents.
+- A valid Benefits Register cache produces cache hits on subsequent requests within the TTL.
+- When the XML service is unavailable and no valid cache is available, the XML adapter exhausts its 3 attempts and the unified service can degrade to the available Resident Index data.
 
 ### What we chose not to change
 
-We did not increase the retry count or add unnecessary retry logic.
+We did not increase the retry count or introduce indefinite retries.
 
-We also did not make the Resident Index dependent on the Benefits Register.
-The two sources remain independently handled so that failure of one source
-does not unnecessarily make the entire API unavailable.
+We did not make the Resident Index dependent on the Benefits Register.
 
-The cache is intentionally limited to a 5-minute TTL so that it does not
-hide a permanently unavailable Benefits Register.
+We did not add identity matching because it is a stretch goal and there is no shared identifier.
 
-### Trade-off
+We did not add a user interface because the problem explicitly accepts command-line demonstration and interface quality is not assessed for this problem.
 
-Caching improves availability and reduces repeated calls to a slow source,
-but it introduces the possibility of serving slightly stale Benefits data.
+We did not add a database or persistence layer because it is not required for this read-only integration.
 
-We accept a maximum staleness of 5 minutes because this provides a practical
-balance between source reliability and data freshness. Once the TTL expires,
-fresh data must be obtained from the Benefits Register.
+We did not add authentication or authorisation because they are not required.
+
+We also did not add a circuit breaker at this stage. It is an optional extension and was intentionally kept outside the mandatory implementation so that reliability improvements would not compromise the required floor.
+
+---
+
+## 9. What Was Cut and Why
+
+The following optional features were not prioritised over the mandatory floor:
+
+### Identity matching
+
+Not implemented because there is no shared identifier between the two sources and incorrect matching could create incorrect resident associations.
+
+### Circuit breaking
+
+Not implemented in the current version.
+
+A circuit breaker could reduce calls to a source that is comprehensively unavailable, but the existing retry, graceful-degradation, adapter separation, and caching behaviour were prioritised first.
+
+### User interface
+
+Not implemented because a command-line demonstration is sufficient for this problem.
+
+### Database or persistence
+
+Not implemented because the API is read-only and persistence is not required.
+
+### Authentication and authorisation
+
+Not implemented because they are outside the stated requirements.
+
+These choices were made to keep the solution focused on the mandatory floor and the reliability behaviour that is central to the problem.
+
+---
+
+## 10. What the Solution Does Not Do
+
+The current solution does not:
+
+- Identify or merge residents across the two source systems.
+- Persist source data in a database.
+- Provide authentication or authorisation.
+- Provide a user interface.
+- Handle additional external source systems beyond the two provided services.
+- Implement a circuit breaker.
+
+These are intentional scope decisions rather than undocumented limitations.
+
+---
+
+## 11. What We Would Fix or Improve First
+
+If additional development time were available, the first optional reliability improvement I would consider would be a circuit breaker for the Benefits Register.
+
+A circuit breaker could reduce repeated calls to a source that is comprehensively unavailable and allow controlled recovery attempts after a cooldown period. It was not retained in the current version because the mandatory floor and caching behaviour were prioritised first.
+
+If further time were available after that, identity matching could be investigated using a conservative confidence-based approach with an explicit policy for uncertain matches.
+
+Identity matching would only be introduced if its accuracy could be demonstrated safely; uncertain matches should not be silently merged.
+
+---
+
+## 12. Key Trade-offs
+
+### Availability vs. freshness
+
+The 5-minute Benefits Register cache improves availability and reduces repeated calls to a slow source, but it allows cached data to become slightly stale.
+
+The accepted maximum staleness is 5 minutes.
+
+### Retry vs. latency
+
+Retrying failed XML requests improves the chance of recovering from temporary failures but adds latency when the source remains unavailable.
+
+A maximum of 3 attempts was chosen as a bounded compromise.
+
+### Independent sources vs. cross-source identity
+
+Keeping the two source records independent avoids incorrect identity merges when no shared key exists.
+
+This means the current API does not produce a single confidently matched person record across both systems, but it avoids silently returning incorrect associations.
+
+### Simplicity vs. optional resilience features
+
+Caching was added because it provides a useful reliability improvement with limited complexity.
+
+Circuit breaking was left out of the current version so that optional resilience logic would not distract from the mandatory floor.
+
+---
+
+## 13. Summary of Key Decisions
+
+The solution prioritises:
+
+1. Independent source adapters.
+2. Complete REST pagination with duplicate removal.
+3. Bounded XML retries.
+4. Explicit graceful degradation.
+5. Read-only idempotent behaviour.
+6. Transparent reporting of missing sources and failure reasons.
+7. A defensible 5-minute Benefits Register cache.
+8. A design that can accommodate the Day-2 source failure-rate change without rewriting the application.
+
+The mandatory floor was prioritised before optional extensions. The current implementation deliberately avoids risky identity matching and other non-required functionality.
