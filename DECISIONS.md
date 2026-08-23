@@ -66,7 +66,8 @@ The response contains:
 - `status: "unavailable"`
 - Empty resident and benefit lists.
 - Both sources listed in `missingSources`.
-- `available: false` and the failure reason for each source.
+- `sourceStatus.residentIndex.available: false` and the failure reason in `sourceStatus.residentIndex.reason`.
+- `sourceStatus.benefitsRegister.available: false` and the failure reason in `sourceStatus.benefitsRegister.reason`.
 
 This ensures that missing data is never silently represented as an empty result.
 
