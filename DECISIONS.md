@@ -97,3 +97,34 @@ The application therefore preserves each source's records independently.
 Caching and circuit breaking were not implemented because the mandatory floor requirements were prioritised first.
 
 The adapter-based architecture allows these features to be added later without significantly changing the unified service or API routes.
+
+---
+
+## 8. Day 2 — Benefits Register Failure Rate
+
+On Day 2, the Benefits Register was changed to fail on approximately 40% of calls.
+
+The existing architecture was kept unchanged because the XML adapter already isolates the Benefits Register from the rest of the application. The adapter retries failed read requests up to 3 times, while the unified service uses `Promise.allSettled()` so that a failure in the XML source does not prevent available Resident Index data from being returned.
+
+### What we changed
+
+No application code changes were required for the Day 2 failure-rate change.
+
+We tested the existing solution against the Benefits Register running with a 40% failure rate.
+
+Two important cases were verified:
+
+- When an XML request failed and a retry succeeded, the API returned `status: "complete"` with both resident and benefit data.
+- When all three XML attempts failed, the API returned `status: "partial"` while still returning the available Resident Index data and reporting `benefitsRegister` in `missingSources`.
+
+### What we chose not to change
+
+We did not increase the retry count or add unnecessary retry logic.
+
+We also did not make the Resident Index dependent on the Benefits Register. The two sources remain independently handled so that failure of one source does not unnecessarily make the entire API unavailable.
+
+### What we would have done differently
+
+If the 40% permanent failure rate had been known from the beginning, we would have considered adding caching for the Benefits Register earlier to reduce repeated calls to an unreliable source.
+
+However, the existing retry and graceful-degradation design was sufficient to handle the Day 2 change without rewriting the application.
