@@ -60,6 +60,7 @@ no-wrong-door-api/
 ├── AI-USAGE.md
 ├── package.json
 └── package-lock.json
+
 ## Requirements
 Node.js 18 or later
 Python 3
