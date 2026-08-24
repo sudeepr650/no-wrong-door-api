@@ -60,7 +60,7 @@ no-wrong-door-api/
 ├── AI-USAGE.md
 ├── package.json
 └── package-lock.json
-Requirements
+## Requirements
 Node.js 18 or later
 Python 3
 
@@ -69,7 +69,7 @@ Check the versions:
 node --version
 npm --version
 python --version
-Setup
+## Setup
 1. Clone the repository
 git clone https://github.com/sudeepr650/no-wrong-door-api.git
 cd no-wrong-door-api
@@ -107,7 +107,7 @@ node src/app.js
 The API is available at:
 
 http://localhost:3000
-API Endpoints
+## API Endpoints
 Health Check
 GET /health
 
@@ -137,7 +137,7 @@ missingSources — unavailable source names
 sourceStatus — availability and failure reason for each source
 data.residents — Resident Index records
 data.benefits — Benefits Register records
-Response Behaviour
+## Response Behaviour
 Source availability	API status
 Both sources available	complete
 Resident Index unavailable	partial
@@ -148,7 +148,7 @@ When a source fails, the API returns the data available from the other source an
 
 If both sources fail, the API returns a valid unavailable response instead of a bare server error.
 
-Benefits Register Caching
+## Benefits Register Caching
 
 Successful Benefits Register responses are cached in memory for 5 minutes.
 
@@ -164,7 +164,7 @@ If the cache has expired and the refresh fails after the normal retry policy, th
 
 The cache therefore improves availability while accepting a maximum possible staleness of 5 minutes.
 
-Testing
+## Testing
 REST pagination and duplicate handling
 node testRest.js
 
@@ -207,7 +207,7 @@ The application should continue to retry failed XML requests up to 3 times. If t
 
 Because the failure is intentionally intermittent, individual requests may succeed or fail. The important behaviour is that a Benefits Register failure does not unnecessarily prevent available Resident Index data from being returned.
 
-Documentation
+## Documentation
 DECISIONS.md
 
 Documents:
@@ -227,7 +227,7 @@ AI-USAGE.md
 
 Documents the AI assistance used during development and the developer's responsibility for the final implementation.
 
-Scope
+## Scope
 
 The current solution intentionally does not include:
 
@@ -241,7 +241,7 @@ Identity matching is not implemented because the two source systems do not provi
 
 Optional reliability improvements such as a circuit breaker may be considered only after the mandatory floor has been fully verified.
 
-Final Verification
+## Final Verification
 
 Before submission:
 
